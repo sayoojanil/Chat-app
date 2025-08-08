@@ -1,85 +1,87 @@
-const express = require('express');
-     const http = require('http');
-     const socketIo = require('socket.io');
-     const mongoose = require('mongoose');
-     const path = require('path');
+const WebSocket = require('ws');
+const { MongoClient } = require('mongodb');
 
-     const app = express();
-     const server = http.createServer(app);
-     const io = socketIo(server, {
-         cors: {
-             origin: process.env.NODE_ENV === 'production' ? ['https://your-render-app.onrender.com'] : '*',
-             methods: ['GET', 'POST']
-         }
-     });
+const uri = 'mongodb+srv://Payingguest:alankarvp100@cluster0.tfrej4l.mongodb.net/Payingguest?retryWrites=true&w=majority'; // Update with your MongoDB connection string if using cloud
+const dbName = 'chatApp';
+const collectionName = 'messages';
+let db;
 
-     // MongoDB connection
-     const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/chatApp';
-     mongoose.connect(MONGO_URI, {
-         useNewUrlParser: true,
-         useUnifiedTopology: true,
-         serverSelectionTimeoutMS: 5000
-     }).then(() => {
-         console.log('Successfully connected to MongoDB');
-     }).catch(err => {
-         console.error('MongoDB connection failed:', err.message);
-         process.exit(1);
-     });
+async function connectToMongoDB() {
+    const client = new MongoClient(uri, { useNewUrlParser: true, useUnifiedTopology: true });
+    try {
+        await client.connect();
+        console.log('Connected to MongoDB');
+        db = client.db(dbName);
+    } catch (error) {
+        console.error('MongoDB connection error:', error);
+        process.exit(1);
+    }
+}
 
-     // Message schema
-     const messageSchema = new mongoose.Schema({
-         username: String,
-         message: String,
-         timestamp: { type: Date, default: Date.now }
-     });
-     const Message = mongoose.model('Message', messageSchema);
+async function startServer() {
+    await connectToMongoDB();
+    const wss = new WebSocket.Server({ port: 8080 });
 
-     // Serve static files
-     app.use(express.static(path.join(__dirname, 'public')));
+    wss.on('connection', async (ws) => {
+        console.log('New client connected');
 
-     // Serve index.html for root route
-     app.get('/', (req, res) => {
-         res.sendFile(path.join(__dirname, 'public', 'index.html'));
-     });
+        // Send chat history to the new client
+        try {
+            const messages = await db.collection(collectionName)
+                .find()
+                .sort({ timestamp: -1 })
+                .limit(50)
+                .toArray();
+            ws.send(JSON.stringify({ type: 'history', messages }));
+        } catch (error) {
+            console.error('Error fetching chat history:', error);
+        }
 
-     io.on('connection', async (socket) => {
-         console.log('New user connected:', socket.id);
+        ws.on('message', async (data) => {
+            try {
+                const message = JSON.parse(data);
+                console.log('Received:', message);
 
-         // Send stored messages
-         try {
-             const messages = await Message.find().sort({ timestamp: 1 }).limit(50);
-             socket.emit('loadMessages', messages);
-             console.log(`Sent ${messages.length} stored messages to client ${socket.id}`);
-         } catch (err) {
-             console.error('Error fetching messages:', err.message);
-             socket.emit('error', { message: 'Failed to load previous messages' });
-         }
+                if (message.type === 'join') {
+                    console.log(`${message.username} joined the chat`);
+                } else if (message.type === 'message') {
+                    // Save message to MongoDB
+                    await db.collection(collectionName).insertOne({
+                        username: message.username,
+                        message: message.message,
+                        timestamp: new Date()
+                    });
 
-         socket.on('chatMessage', async ({ username, message }) => {
-             const newMessage = new Message({
-                 username: username || socket.id,
-                 message,
-                 timestamp: new Date()
-             });
+                    // Broadcast message to all clients
+                    wss.clients.forEach((client) => {
+                        if (client.readyState === WebSocket.OPEN) {
+                            client.send(JSON.stringify({
+                                type: 'message',
+                                username: message.username,
+                                message: message.message
+                            }));
+                        }
+                    });
+                }
+            } catch (error) {
+                console.error('Error processing message:', error);
+            }
+        });
 
-             try {
-                 await newMessage.save();
-                 io.emit('message', {
-                     username: newMessage.username,
-                     message: newMessage.message,
-                     timestamp: newMessage.timestamp
-                 });
-                 console.log(`Message saved from ${newMessage.username}`);
-             } catch (err) {
-                 console.error('Error saving message:', err.message);
-                 socket.emit('error', { message: 'Failed to send message' });
-             }
-         });
+        ws.on('close', () => {
+            console.log('Client disconnected');
+        });
 
-         socket.on('disconnect', () => {
-             console.log('User disconnected:', socket.id);
-         });
-     });
+        ws.on('error', (error) => {
+            console.error('WebSocket error:', error);
+        });
+    });
 
-     const PORT = process.env.PORT || 3000;
-     server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+    wss.on('error', (error) => {
+        console.error('Server error:', error);
+    });
+
+    console.log('WebSocket server running on ws://localhost:8080');
+}
+
+startServer();

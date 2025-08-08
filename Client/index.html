@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Website</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        #chatBox {
+            height: 70vh;
+            overflow-y: auto;
+        }
+        .message {
+            margin: 10px;
+            padding: 10px;
+            border-radius: 10px;
+            max-width: 80%;
+        }
+        .sent {
+            background-color: #3b82f6;
+            color: white;
+            margin-left: auto;
+        }
+        .received {
+            background-color: #e5e7eb;
+            color: black;
+        }
+        #status {
+            font-size: 0.9rem;
+            color: #6b7280;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center h-screen">
+    <div class="w-full max-w-md bg-white rounded-lg shadow-lg p-6">
+        <h1 class="text-2xl font-bold text-center mb-4">Chat Website</h1>
+        <div id="usernameSection" class="mb-4">
+            <input id="usernameInput" type="text" placeholder="Enter your username" class="w-full p-2 border rounded">
+            <button id="setUsername" class="w-full mt-2 bg-blue-500 text-white p-2 rounded hover:bg-blue-600">Join Chat</button>
+        </div>
+        <div id="chatSection" class="hidden">
+            <div id="status" class="text-center mb-2">Connecting...</div>
+            <div id="chatBox" class="border rounded p-4 mb-4 bg-gray-50"></div>
+            <div class="flex">
+                <input id="messageInput" type="text" placeholder="Type a message..." class="flex-1 p-2 border rounded-l">
+                <button id="sendButton" class="bg-blue-500 text-white p-2 rounded-r hover:bg-blue-600">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws;
+        let username;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+
+        const usernameInput = document.getElementById('usernameInput');
+        const setUsername = document.getElementById('setUsername');
+        const chatSection = document.getElementById('chatSection');
+        const usernameSection = document.getElementById('usernameSection');
+        const messageInput = document.getElementById('messageInput');
+        const sendButton = document.getElementById('sendButton');
+        const chatBox = document.getElementById('chatBox');
+        const status = document.getElementById('status');
+
+        setUsername.addEventListener('click', () => {
+            username = usernameInput.value.trim();
+            if (username) {
+                usernameSection.classList.add('hidden');
+                chatSection.classList.remove('hidden');
+                connectWebSocket();
+            } else {
+                alert('Please enter a username');
+            }
+        });
+
+        function connectWebSocket() {
+            console.log('Attempting to connect to WebSocket...');
+            ws = new WebSocket('ws://localhost:8080');
+
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                status.textContent = 'Connected';
+                status.classList.add('text-green-500');
+                reconnectAttempts = 0;
+                ws.send(JSON.stringify({ type: 'join', username }));
+            };
+
+            ws.onmessage = (event) => {
+                console.log('Received message:', event.data);
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'message') {
+                        displayMessage(data.username, data.message, data.username === username);
+                    } else if (data.type === 'history') {
+                        data.messages.forEach(msg => {
+                            displayMessage(msg.username, msg.message, msg.username === username);
+                        });
+                    }
+                } catch (error) {
+                    console.error('Error parsing message:', error);
+                }
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                status.textContent = 'Disconnected. Reconnecting...';
+                status.classList.remove('text-green-500');
+                status.classList.add('text-red-500');
+                if (reconnectAttempts < maxReconnectAttempts) {
+                    reconnectAttempts++;
+                    setTimeout(connectWebSocket, 2000);
+                } else {
+                    status.textContent = 'Failed to reconnect. Please refresh the page.';
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+        }
+
+        function displayMessage(sender, message, isSent) {
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('message', isSent ? 'sent' : 'received');
+            messageDiv.innerHTML = `<strong>${sender}:</strong> ${message}`;
+            chatBox.appendChild(messageDiv);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        sendButton.addEventListener('click', sendMessage);
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
+
+        function sendMessage() {
+            const message = messageInput.value.trim();
+            if (message && ws && ws.readyState === WebSocket.OPEN) {
+                console.log('Sending message:', message);
+                ws.send(JSON.stringify({ type: 'message', username, message }));
+                messageInput.value = '';
+            } else if (!ws || ws.readyState !== WebSocket.OPEN) {
+                alert('Not connected to the server. Please wait or refresh.');
+            } else {
+                alert('Please enter a message');
+            }
+        }
+    </script>
+</body>
+</html>
